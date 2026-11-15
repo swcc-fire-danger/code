@@ -6,7 +6,7 @@ owner's ArcGIS sign-in (the AGOL_CLIENT_ID / AGOL_REFRESH_TOKEN GitHub secrets).
 
 It reads the access table, applies the same rules as the website (a change only counts if the
 person who saved it was allowed to make it), and then:
-  - adds people to the Pilot / Leaders / Admins groups they should be in,
+  - adds people to the Users / Leaders / Admins groups they should be in,
   - makes them group managers when their access says "Manager",
   - removes people only from groups they lost through a "Removed" change.
 People added to a group directly in ArcGIS are never removed by this script.
@@ -20,7 +20,7 @@ PORTAL = os.environ.get("ARCGIS_PORTAL_URL", "https://nifc.maps.arcgis.com").rst
 REST = PORTAL + "/sharing/rest"
 LEADERS_ITEM = "08d11d0fbf9f4ac8b9b25857cf32cd62"    # FDRA_Leaders (the access table)
 GROUPS = {
-    "pilot": "3a8d33917b694e2d8587f301e1739a2f",     # SWCC Fire Danger Application Pilot
+    "pilot": "62660ea7de8b463b8e04765b124f9e26",     # SWCC Fire Danger Users
     "leaders": "95e3e6ab264e4380b80a85b7b74b55ac",   # SWCC Fire Danger Leaders
     "admins": "71fd5cd4d96441fab40fa11f38e2c3e5",    # SWCC Fire Danger Admins
 }
@@ -142,7 +142,7 @@ class Access:
         gs, w = self.grants(u), {}
         if not gs:
             return w
-        # leaders and admins manage the Pilot group, so the people they add can open the app right away
+        # leaders and admins manage the Users group, so the people they add can open the app right away
         w["pilot"] = "admin" if any(g["manager"] or g["base"] != "Viewer" for g in gs) else "member"
         lead = [g for g in gs if g["base"] in LEADER_LEVELS]
         if lead:
@@ -216,6 +216,8 @@ def main():
     users = set(acc.people) | {norm(h["user"]) for h in acc.history if h["ok"]}
     done = failed = 0
     for u in sorted(users):
+        if acc.is_root(u):
+            continue    # the site owner's group membership is never changed
         want, lost = acc.want(u), acc.lost(u)
         name = next((g["user"] for g in acc.grants(u)), None) or next(h["user"] for h in acc.history if norm(h["user"]) == u)
         for k, gid in GROUPS.items():
