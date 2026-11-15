@@ -25,6 +25,8 @@ from decimal import Decimal, ROUND_HALF_UP
 import numpy as np
 import pandas as pd
 
+import climate_cards
+
 DATA_DIR = os.environ.get("FEMS_DATA_DIR", "data")
 OUT_DIR = os.environ.get("WEB_OUT_DIR", os.path.join("site", "data"))
 HOURLY_DAYS = 7
@@ -392,7 +394,8 @@ def main():
     extra_path = P(EXTRA_PCT_FILE)
     extra = pd.read_csv(extra_path) if os.path.exists(extra_path) else None
     # 2005-2024 daily station ERC/BI (fdra-climo release): used for the percentiles of averaged methods (7-day average)
-    hist_daily_path = P("history_2005_2024_daily_erc_bi.csv")
+    # (the newest history period in the folder is used, e.g. 2005-2025 once that has been pulled)
+    hist_daily_path = climate_cards.newest(DATA_DIR, "history_*_daily_erc_bi.csv") or P("history_2005_2024_daily_erc_bi.csv")
     hist_daily = None
     if os.path.exists(hist_daily_path):   # also used for the station map colors (ERC-Y percentile of every station)
         hist_daily = pd.read_csv(hist_daily_path, dtype={"sid": str})
@@ -404,6 +407,7 @@ def main():
 
     station_fdras = {}
     fdra_list = []
+    card_rows = []      # FDRA key, stations, fuel model for the climate cards
     avg_pct_rows = []   # N-day average percentile tables, saved as a CSV with the website data
     for _, r in fdra.iterrows():
         key = r["FDRA_ZONE"].strip()
@@ -411,6 +415,7 @@ def main():
         fm = (r.get("FM_Long") or "Y").strip() or "Y"
         for s in sig:
             station_fdras.setdefault(s, []).append(key)
+        card_rows.append({"key": key, "sig": sig, "fm": fm})
 
         h = hist[hist["FDRA_ZONE"].str.strip() == key].sort_values("Percentiles")
         thresholds = {}
@@ -739,6 +744,14 @@ def main():
         except Exception as e:
             print(f"Note: no FEMS pull time from {name} ({e})")
     fems_pulled = max(fems_pulls.values()) if fems_pulls else None
+
+    # ---------- FDRA climate cards + all-FDRA historical percentiles ----------
+    try:
+        all_obs = sorted(nfdr["summary_date"].unique())
+        fut = [d for d in fc_days if today and d > today]
+        climate_cards.build(OUT_DIR, DATA_DIR, card_rows, nfdr, fc, wxd, fwx, today, all_obs, fut, climo, extra, hist)
+    except Exception as e:   # never break the website build
+        print(f"WARNING: climate cards not built ({e})")
 
     if avg_pct_rows:   # downloadable: the exact N-day average percentile tables the site used
         pd.DataFrame(avg_pct_rows).to_csv(os.path.join(OUT_DIR, "r3_fdra_percentile_multiday.csv"), index=False)
