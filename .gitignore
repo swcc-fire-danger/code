@@ -1,0 +1,6 @@
+data/history_*.csv
+data/30days_*.csv
+data/obs_nfdr_daily_fdra.csv
+data/r3_fdra_daily_climo.csv
+data/r3_fdra_percentile_extra.csv
+__pycache__/
