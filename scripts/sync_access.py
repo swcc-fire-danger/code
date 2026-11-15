@@ -231,11 +231,11 @@ def main():
                     if j.get("notAdded"):
                         raise RuntimeError("not added")
                     if w == "admin":
-                        arc(f"{REST}/community/groups/{gid}/updateUsers", {"managers": name}, post=True)
+                        arc(f"{REST}/community/groups/{gid}/updateUsers", {"admins": name}, post=True)
                     print(f"  added {name} to {k}{' as manager' if w == 'admin' else ''}")
                     done += 1
                 elif w == "admin" and cur == "member":
-                    arc(f"{REST}/community/groups/{gid}/updateUsers", {"managers": name}, post=True)
+                    arc(f"{REST}/community/groups/{gid}/updateUsers", {"admins": name}, post=True)
                     print(f"  made {name} a manager of {k}")
                     done += 1
                 elif w == "member" and cur == "admin" and any(h["ok"] and h["removed"] and norm(h["user"]) == u for h in acc.history):
