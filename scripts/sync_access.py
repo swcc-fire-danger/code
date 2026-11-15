@@ -6,7 +6,7 @@ owner's ArcGIS sign-in (the AGOL_CLIENT_ID / AGOL_REFRESH_TOKEN GitHub secrets).
 
 It reads the access table, applies the same rules as the website (a change only counts if the
 person who saved it was allowed to make it), and then:
-  - adds people to the Users / Leaders / Admins groups they should be in,
+  - adds people to the Users / Guests / Leaders / Admins groups they should be in,
   - makes them group managers when their access says "Manager",
   - removes people only from groups they lost through a "Removed" change.
 People added to a group directly in ArcGIS are never removed by this script.
@@ -21,11 +21,14 @@ REST = PORTAL + "/sharing/rest"
 LEADERS_ITEM = "08d11d0fbf9f4ac8b9b25857cf32cd62"    # FDRA_Leaders (the access table)
 GROUPS = {
     "pilot": "62660ea7de8b463b8e04765b124f9e26",     # SWCC Fire Danger Users
+    "guests": "b8323391342e41a9965a9e233cf5f07d",    # SWCC Fire Danger Guests
     "leaders": "95e3e6ab264e4380b80a85b7b74b55ac",   # SWCC Fire Danger Leaders
     "admins": "71fd5cd4d96441fab40fa11f38e2c3e5",    # SWCC Fire Danger Admins
 }
-LEVELS = ["Viewer", "FDRA Leader", "Zone Leader", "All Zones", "Admin"]
+LEVELS = ["Guest", "Viewer", "FDRA Leader", "Zone Leader", "All Zones", "Admin"]   # "Viewer" is shown as "User"
 LEADER_LEVELS = {"FDRA Leader", "Zone Leader", "All Zones"}
+VIEW_LEVELS = {"Guest", "Viewer"}
+RULES_V2_AT = 1794772800000    # 2026-11-15 20:00 UTC: rows saved before this keep the rules they were saved under
 TOKEN = None
 
 
@@ -86,8 +89,58 @@ class Access:
         zone = str(key).split(" ")[0]
         return self.leads_zone(u, zone) or any(g["base"] == "FDRA Leader" and norm(g["fdra"]) == norm(key) for g in self.grants(u))
 
+    # area a person leads; mgr=True counts only the leader access they manage
+    def lgr(self, u, mgr): return [g for g in self.grants(u) if g["base"] in LEADER_LEVELS and (not mgr or g["manager"])]
+    def in_all(self, u, mgr): return any(g["base"] == "All Zones" for g in self.lgr(u, mgr))
+    def in_zone(self, u, z, mgr): return self.in_all(u, mgr) or any(g["base"] == "Zone Leader" and norm(g["zone"]) == norm(z) for g in self.lgr(u, mgr))
+
+    def in_fdra(self, u, key, mgr):
+        if not key:
+            return False
+        return self.in_zone(u, str(key).split(" ")[0], mgr) or any(g["base"] == "FDRA Leader" and norm(g["fdra"]) == norm(key) for g in self.lgr(u, mgr))
+
+    def in_scope(self, u, g, mgr):
+        if g["fdra"]:
+            return self.in_fdra(u, g["fdra"], mgr)
+        if g["zone"]:
+            return self.in_zone(u, g["zone"], mgr)
+        return self.in_all(u, mgr)
+
     def may_change(self, by, g, removing):
+        """Same rules as the website.
+        Admin manager: anyone. Admin member: Guests, Users, FDRA and Zone Leaders anywhere.
+        Leader manager: Guests, Users and leaders up to their level, in the area they manage.
+        Leader member: adds Guests and Users in their area; cannot edit or remove.
+        Nobody but the owner changes the owner's access or their own."""
+        if g["at"] and g["at"] < RULES_V2_AT:
+            return self.may_change_v1(by, g, removing)
         if not by or not g["base"]:
+            return False
+        if self.is_root(g["user"]) and not self.is_root(by):
+            return False
+        if not self.is_root(by) and norm(g["user"]) == norm(by):
+            return False
+        if self.admin_mgr(by):
+            return True
+        if g["base"] in ("Admin", "All Zones"):
+            return False
+        view = g["base"] in VIEW_LEVELS
+        if view and g["manager"]:
+            return False
+        if self.admin(by):           # admin member
+            return view or g["base"] in ("FDRA Leader", "Zone Leader")
+        if view:
+            return self.in_scope(by, g, bool(removing))
+        if g["base"] == "Zone Leader":
+            return self.in_zone(by, g["zone"], True)
+        if g["base"] == "FDRA Leader":
+            return self.in_fdra(by, g["fdra"], True)
+        return False
+
+    def may_change_v1(self, by, g, removing):
+        if not by or not g["base"]:
+            return False
+        if self.is_root(g["user"]) and not self.is_root(by):
             return False
         if self.admin_mgr(by):
             return True
@@ -111,7 +164,7 @@ class Access:
 
     @staticmethod
     def key(g):
-        scoped_zone = norm(g["zone"]) if g["base"] in ("Viewer", "Zone Leader") else ""
+        scoped_zone = norm(g["zone"]) if g["base"] in VIEW_LEVELS or g["base"] == "Zone Leader" else ""
         return "|".join([g["base"], scoped_zone, norm(g["fdra"])])
 
     def build(self, rows, creator, created):
@@ -139,29 +192,38 @@ class Access:
             self.history.append(g)
 
     def want(self, u):
+        """Guest: Guests member. User: Users member. Any leader: Users + Guests manager, Leaders member
+        (manager for leader managers). Admin member: also Leaders manager + Admins member. Admin manager: manager everywhere."""
         gs, w = self.grants(u), {}
         if not gs:
             return w
-        # leaders and admins manage the Users group, so the people they add can open the app right away
-        w["pilot"] = "admin" if any(g["manager"] or g["base"] != "Viewer" for g in gs) else "member"
         lead = [g for g in gs if g["base"] in LEADER_LEVELS]
-        if lead:
-            w["leaders"] = "admin" if any(g["manager"] for g in lead) else "member"
         adm = [g for g in gs if g["base"] == "Admin"]
-        if adm:
-            w["admins"] = "admin" if any(g["manager"] for g in adm) else "member"
+        if lead or adm:
+            w["pilot"] = w["guests"] = "admin"
+            w["leaders"] = "admin" if any(g["manager"] for g in lead) or adm else "member"
+            if adm:
+                w["admins"] = "admin" if any(g["manager"] for g in adm) else "member"
+        elif any(g["base"] == "Viewer" for g in gs):
+            w["pilot"] = "member"
+        elif any(g["base"] == "Guest" for g in gs):
+            w["guests"] = "member"
         return w
 
     def lost(self, u):
         out, w = set(), self.want(u)
         had = [h for h in self.history if h["ok"] and h["removed"] and norm(h["user"]) == norm(u)]
         for h in had:
+            if h["base"] == "Guest":
+                out.add("guests")
+            if h["base"] == "Viewer":
+                out.add("pilot")
             if h["base"] in LEADER_LEVELS:
-                out.add("leaders")
+                out |= {"leaders", "guests", "pilot"}
             if h["base"] == "Admin":
-                out.add("admins")
+                out |= {"admins", "leaders", "guests", "pilot"}
         if had and not self.grants(u):
-            out.add("pilot")
+            out |= set(GROUPS)
         return out - set(w)
 
 
@@ -243,6 +305,8 @@ def main():
                     print(f"  {name} is no longer a manager of {k}")
                     done += 1
                 elif not w and cur and k in lost:
+                    if cur == "admin":   # a manager is made a member first, then removed
+                        arc(f"{REST}/community/groups/{gid}/updateUsers", {"users": name}, post=True)
                     arc(f"{REST}/community/groups/{gid}/removeUsers", {"users": name}, post=True)
                     print(f"  removed {name} from {k}")
                     done += 1
