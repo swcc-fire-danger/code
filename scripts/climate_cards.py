@@ -180,6 +180,9 @@ def build(out_dir, data_dir, fdra_rows, nfdr, fc, wxd, fwx, today, obs_days, fut
 
         recent = {"past7": values(nfdr, wxd, past), "today": values(fc, fwx, [today] if today else []),
                   "next7": values(fc, fwx, nxt)}
+        for n in (3, 5):   # shorter averages for the card's 3 / 5 / 7-day choice
+            recent[f"past{n}"] = values(nfdr, wxd, past[-n:])
+            recent[f"next{n}"] = values(fc, fwx, nxt[:n])
         normal = None
         if climo is not None and today:
             md = today[5:]
@@ -195,7 +198,9 @@ def build(out_dir, data_dir, fdra_rows, nfdr, fc, wxd, fwx, today, obs_days, fut
         "rows": ROW_LABELS, "pcts": ROW_PCTS,
         "cols": [{"k": k, "label": l, "group": g, "dec": d, "inv": inv} for k, l, g, _, d, inv in COLS],
         "dates": {"past7": [past[0], past[-1]] if past else None, "today": today,
-                  "next7": [nxt[0], nxt[-1]] if nxt else None},
+                  "next7": [nxt[0], nxt[-1]] if nxt else None,
+                  **{f"past{n}": [past[-n:][0], past[-1]] if past else None for n in (3, 5)},
+                  **{f"next{n}": [nxt[0], nxt[:n][-1]] if nxt else None for n in (3, 5)}},
         "fdras": fdras,
     }
     path = os.path.join(out_dir, "climate.json")
