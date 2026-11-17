@@ -100,6 +100,8 @@ INVERT_PCT = ["fm100", "fm1000", "gsi"]
 # FDRAs rated with the VPD x SFDI matrix also use these ranges for their VPD and SFDI classes.
 OTHER_PCT_RANGES = [[0, 34], [35, 64], [65, 84], [85, 95], [96, 100]]
 OTHER_PCT_BY_ZONE = {"WDZ": [[c["min"], c["max"]] for c in CLASSES]}
+# multi-day averages offered on the site (7 is the default and is in every report)
+AVG_DAYS = [3, 5, 7]
 # indices that make up the rating for FDRAs without their own ERC/BI method
 RATING_INDICES = ["vpd", "sfdi"] if FIRE_DANGER_METHOD == "matrix" else [FIRE_DANGER_INDEX]
 # SFDI / VPD / HDWI percentiles come from the one-time 2005-2024 history pull (r3_fdra_percentile_extra.csv).
@@ -612,6 +614,12 @@ def main():
                  ("7-Day Forecast", fc, fwx, ([today] if today else []) + future[:6])]      # today + next 6 days
         detail_report = [{"label": label, "days": days, "type": "O" if nf is nfdr else "F",
                           "values": day_values(nf, wx, days) if days else None} for label, nf, wx, days in rows]
+        # 3- and 5-day averages (same calculation as the 7-day rows); the site's average switch shows them in place of the 7-day rows
+        avg_rows = {str(n): [{"label": f"{n}-Day Observed", "days": obs_days[-n:], "type": "O",
+                              "values": day_values(nfdr, wxd, obs_days[-n:]) if obs_days[-n:] else None},
+                             {"label": f"{n}-Day Forecast", "days": fdays, "type": "F",
+                              "values": day_values(fc, fwx, fdays) if fdays else None}]
+                    for n in AVG_DAYS if n != 7 for fdays in [([today] if today else []) + future[:n - 1]]}
         # Day-by-day strip (every FDRA): each of the last 7 observed days and the 7 forecast days on its own
         daily = []
         for nf, wx, days in ((nfdr, wxd, obs_days[-7:]), (fc, fwx, ([today] if today else []) + future[:6])):
@@ -658,7 +666,7 @@ def main():
 
         item = {
             "report": report, "breakpoints": breakpoints,
-            "detail_report": detail_report, "daily": daily, **({"planner": planner} if pm else {}),
+            "detail_report": detail_report, "avg_rows": avg_rows, "daily": daily, **({"planner": planner} if pm else {}),
             "key": key, "slug": slug(key), "name": r["FDRA"].strip(), "zone": r["Zone"].strip(),
             "fdra_id": r["FDRA_ID"], "fuel_model": fm, "sig_raws": sig,
             "mfd": r.get("MFD_Thresh"), "lfd": r.get("LFD_Threshold"),
