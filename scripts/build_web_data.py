@@ -95,6 +95,13 @@ BREAKPOINT_INDICES = ["erc", "bi"]  # shown in the Fire Danger Breakpoints table
 # The report shows these as dryness percentiles (100 - pct) so the colors mean danger, like the CA dashboard.
 #   GSI too: higher GSI = greener = lower danger. (Same as the Kaibab FDOP workbook's percentile tables.)
 INVERT_PCT = ["fm100", "fm1000", "gsi"]
+# Percentile ranges (Low, Moderate, High, Very High, Extreme) for every index that is not part of an
+# FDRA's rating calculation. One set for all zones; a zone listed in OTHER_PCT_BY_ZONE keeps its own set.
+# FDRAs rated with the VPD x SFDI matrix also use these ranges for their VPD and SFDI classes.
+OTHER_PCT_RANGES = [[0, 34], [35, 64], [65, 84], [85, 95], [96, 100]]
+OTHER_PCT_BY_ZONE = {"WDZ": [[c["min"], c["max"]] for c in CLASSES]}
+# indices that make up the rating for FDRAs without their own ERC/BI method
+RATING_INDICES = ["vpd", "sfdi"] if FIRE_DANGER_METHOD == "matrix" else [FIRE_DANGER_INDEX]
 # SFDI / VPD / HDWI percentiles come from the one-time 2005-2024 history pull (r3_fdra_percentile_extra.csv).
 EXTRA_PCT_FILE = "r3_fdra_percentile_extra.csv"
 EXTRA_INDICES = {"sfdi": "SFDI", "vpd": "VPD", "hdwi": "HDWI"}
@@ -284,23 +291,30 @@ def hdwi_of(vpd, wind_mph):
     return None if vpd is None or wind_mph is None or pd.isna(vpd) or pd.isna(wind_mph) else (float(vpd) / 100) * (float(wind_mph) * 0.447)
 
 
-def class_of_pct(p):
-    """Index into CLASSES for a percentile (0=Low ... 4=Extreme)."""
+def zone_pct_ranges(zone):
+    """General percentile ranges for a zone (Low..Extreme)."""
+    return OTHER_PCT_BY_ZONE.get(str(zone).strip(), OTHER_PCT_RANGES)
+
+
+def class_of_pct(p, ranges=None):
+    """Index into the classes for a percentile (0=Low ... 4=Extreme). Percentiles are whole numbers;
+    a value between two ranges goes to the higher class (e.g. 95.5 -> Extreme with 85-95 / 96-100)."""
     if p is None:
         return None
-    for i, c in enumerate(CLASSES):
-        if c["min"] <= p <= c["max"]:
+    ranges = ranges or [[c["min"], c["max"]] for c in CLASSES]
+    for i, (lo, hi) in enumerate(ranges):
+        if p <= hi:
             return i
-    return len(CLASSES) - 1 if p > CLASSES[-1]["max"] else 0
+    return len(ranges) - 1
 
 
-def fire_danger_class(res):
+def fire_danger_class(res, ranges=None):
     """Returns (class index, method used) for one report row."""
     if FIRE_DANGER_METHOD == "matrix":
-        cv, cs = class_of_pct(res.get("vpd_pct")), class_of_pct(res.get("sfdi_pct"))
+        cv, cs = class_of_pct(res.get("vpd_pct"), ranges), class_of_pct(res.get("sfdi_pct"), ranges)
         if cv is not None and cs is not None:
             return FD_MATRIX[cv][cs], "matrix"
-    c = class_of_pct(res.get(FIRE_DANGER_INDEX + "_pct"))
+    c = class_of_pct(res.get(FIRE_DANGER_INDEX + "_pct"), ranges)
     return c, (FIRE_DANGER_INDEX if c is not None else None)
 
 
@@ -529,7 +543,7 @@ def main():
                 if k in thresholds:
                     pct = percentile_for(v, thresholds[k]) if (v is not None and pd.notna(v)) else None
                     res[k + "_pct"] = (100 - pct) if (pct is not None and k in INVERT_PCT) else pct
-            res["fd"], res["fd_method"] = fire_danger_class(res)
+            res["fd"], res["fd_method"] = fire_danger_class(res, zone_pct_ranges(r["Zone"]))
             if pm:
                 # Planner method: ERC class and BI class (from the values) meet in the planner's matrix
                 # averaged methods: a single day (or a row as long as the window) uses the average ending on its last day
@@ -631,11 +645,14 @@ def main():
                        "pct_ranges": {k: ranges(pm_tops[k]) if None not in pm_tops[k] else None for k in pm_ix}}
 
         breakpoints = []
-        for c in CLASSES:
-            row = {"class": c["name"], "range": f'{c["min"]}-{c["max"]}%'}
+        other = OTHER_PCT_BY_ZONE.get(r["Zone"].strip(), OTHER_PCT_RANGES)
+        rating_ix = (["erc"] + (["bi"] if pm.get("bi") else [])) if pm else []
+        for i, c in enumerate(CLASSES):
+            row = {"class": c["name"], "range": f'{c["min"]}-{c["max"]}%', "other_range": f"{other[i][0]}-{other[i][1]}%"}
             for k in [*BREAKPOINT_INDICES, *[x for x in EXTRA_INDICES if thresholds[x]]]:
-                lo = next((v for v, p in thresholds[k] if p >= max(c["min"], 1)), None)
-                hi = next((v for v, p in reversed(thresholds[k]) if p <= c["max"]), None)
+                cmin, cmax = (c["min"], c["max"]) if k in rating_ix else other[i]
+                lo = next((v for v, p in thresholds[k] if p >= max(cmin, 1)), None)
+                hi = next((v for v, p in reversed(thresholds[k]) if p <= cmax), None)
                 row[k] = [rnd(lo, 0), rnd(hi, 0)]
             breakpoints.append(row)
 
@@ -763,6 +780,7 @@ def main():
         "today": today,
         "classes": CLASSES, "fire_danger_index": FIRE_DANGER_INDEX,
         "fire_danger_method": FIRE_DANGER_METHOD, "fd_matrix": FD_MATRIX,
+        "other_pct": {"default": OTHER_PCT_RANGES, "zones": OTHER_PCT_BY_ZONE}, "rating_indices": RATING_INDICES,
         "report_cols": [{"key": k, "label": l, "group": g, "pct": p} for k, l, g, p in REPORT_COLS],
         "breakpoint_indices": BREAKPOINT_INDICES + ([*EXTRA_INDICES] if extra is not None else []), "inverted_pct": INVERT_PCT,
         "stations": stations,
