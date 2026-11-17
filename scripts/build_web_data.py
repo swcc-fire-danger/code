@@ -211,7 +211,7 @@ PLANNER_METHODS = {
     },
 }
 
-# Station map markers: every station is colored by its ERC-Y percentile (latest observed day) and shows
+# Station map markers: every station is colored by its ERC-Y percentile (today's forecast) and shows
 # the trend over the most recent 3 days: Increase / Decrease when ERC-Y changed by TREND_STEP or more.
 STATION_FM = "Y"
 TREND_DAYS = 3
@@ -719,23 +719,28 @@ def main():
                    {"id": sid, "nfdr": by_fm, "forecast": fc_fm, "wx_daily": wx_daily, "wx_forecast": wx_fc, "wx_hourly": wx_hourly})
 
         last_wx = wx_hourly[-1] if wx_hourly else None
-        # Station map marker: latest observed ERC-Y, its percentile against the station's own 2005-2024
-        # ERC-Y record, and the trend over the most recent 3 days (latest day vs two days before it).
+        # Station map marker (circles and diamonds):
+        #   color = TODAY's forecast ERC-Y, as a percentile of the station's own 2005-2024 ERC-Y record
+        #   trend = the most recent 3 observed days (latest observed day vs two days before it), unchanged
         st_map = None
+        thr = None
+        if hist_daily is not None:
+            hs = hist_daily[(hist_daily["sid"] == sid) & (hist_daily["fuel_model"] == STATION_FM)]["erc"].dropna()
+            if len(hs) >= 365:
+                thr = sorted(zip(np.round(np.percentile(hs, range(1, 101)), 2), range(1, 101)))
         yrows = by_fm.get(STATION_FM) or []
-        if yrows and yrows[-1].get("erc") is not None:
-            d0, e0 = yrows[-1]["d"], yrows[-1]["erc"]
-            pct = None
-            if hist_daily is not None:
-                hs = hist_daily[(hist_daily["sid"] == sid) & (hist_daily["fuel_model"] == STATION_FM)]["erc"].dropna()
-                if len(hs) >= 365:
-                    thr = sorted(zip(np.round(np.percentile(hs, range(1, 101)), 2), range(1, 101)))
-                    pct = percentile_for(e0, thr)
-            by_d = {r["d"]: r.get("erc") for r in yrows}
-            d_prev = (datetime.strptime(d0, "%Y-%m-%d") - timedelta(days=TREND_DAYS - 1)).strftime("%Y-%m-%d")
-            e_prev = by_d.get(d_prev)
-            trend = None if e_prev is None else "up" if e0 - e_prev >= TREND_STEP else "down" if e_prev - e0 >= TREND_STEP else "flat"
-            st_map = {"d": d0, "erc": e0, "pct": pct, "trend": trend, "d_prev": d_prev if e_prev is not None else None, "erc_prev": e_prev}
+        trow = next((x for x in (fc_fm.get(STATION_FM) or []) if x["d"] == today and x.get("erc") is not None), None)
+        if trow or (yrows and yrows[-1].get("erc") is not None):
+            trend = d0 = e0 = d_prev = e_prev = None
+            if yrows and yrows[-1].get("erc") is not None:
+                d0, e0 = yrows[-1]["d"], yrows[-1]["erc"]
+                by_d = {r["d"]: r.get("erc") for r in yrows}
+                d_prev = (datetime.strptime(d0, "%Y-%m-%d") - timedelta(days=TREND_DAYS - 1)).strftime("%Y-%m-%d")
+                e_prev = by_d.get(d_prev)
+                trend = None if e_prev is None else "up" if e0 - e_prev >= TREND_STEP else "down" if e_prev - e0 >= TREND_STEP else "flat"
+            st_map = {"d": trow["d"] if trow else None, "erc": trow["erc"] if trow else None,
+                      "pct": percentile_for(trow["erc"], thr) if (trow and thr) else None,
+                      "trend": trend, "d_obs": d0, "erc_obs": e0, "d_prev": d_prev if e_prev is not None else None, "erc_prev": e_prev}
         # one-line summaries for the zone / FDRA popups: latest observed day and today's forecast
         pick = lambda r: {k: r.get(k) for k in ("d", "tmax", "tmin", "rhmin", "wind", "gust", "precip", "vpdmax")} if r else None
         nf = lambda r: {k: r.get(k) for k in ("d", "erc", "bi", "fm100", "fm1000", "kbdi")} if r else None
